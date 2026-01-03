@@ -1,0 +1,228 @@
+'use client';
+
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Header } from '@/components/Header';
+import { Filters } from '@/components/Filters';
+import { TradeTable } from '@/components/TradeTable';
+import { ScoreBreakdown } from '@/components/ScoreBreakdown';
+import { ScoreBadge } from '@/components/ScoreBadge';
+import { AnalyzedTrade, FilterState, Stats } from '@/lib/types';
+import { analyzeRealTrades } from '@/lib/scoring';
+import { fetchRealTrades } from '@/lib/polymarket';
+
+export default function Home() {
+  const [allTrades, setAllTrades] = useState<AnalyzedTrade[]>([]);
+  const [selectedTrade, setSelectedTrade] = useState<AnalyzedTrade | null>(null);
+  const [isLive, setIsLive] = useState(true);
+  const [lastUpdate, setLastUpdate] = useState(new Date());
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  
+  const [filters, setFilters] = useState<FilterState>({
+    minSize: 0,
+    minScore: 0,
+    timeRange: '24h',
+  });
+
+  const fetchTrades = useCallback(async () => {
+    try {
+      setError(null);
+      
+      const rawTrades = await fetchRealTrades({
+        limit: 200,
+        minSize: filters.minSize > 0 ? filters.minSize : undefined,
+      });
+      
+      if (rawTrades.length === 0) {
+        setError('Unable to fetch live data. API may be temporarily unavailable.');
+        return;
+      }
+      
+      const analyzedTrades = analyzeRealTrades(rawTrades);
+      setAllTrades(analyzedTrades);
+      setLastUpdate(new Date());
+    } catch (err) {
+      console.error('Error fetching trades:', err);
+      setError('Failed to fetch trades. Retrying...');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [filters.minSize]);
+
+  useEffect(() => {
+    fetchTrades();
+  }, [fetchTrades]);
+
+  useEffect(() => {
+    if (!isLive) return;
+    const interval = setInterval(fetchTrades, 30000);
+    return () => clearInterval(interval);
+  }, [isLive, fetchTrades]);
+
+  const filteredTrades = useMemo(() => {
+    const now = Date.now();
+    const timeRangeMs: Record<string, number> = {
+      '1h': 60 * 60 * 1000,
+      '6h': 6 * 60 * 60 * 1000,
+      '24h': 24 * 60 * 60 * 1000,
+      '7d': 7 * 24 * 60 * 60 * 1000,
+      '30d': 30 * 24 * 60 * 60 * 1000,
+    };
+    
+    return allTrades.filter(trade => {
+      if (trade.insiderScore < filters.minScore) return false;
+      if (filters.side && trade.side !== filters.side) return false;
+      
+      const tradeTime = new Date(trade.timestamp).getTime();
+      if (now - tradeTime > timeRangeMs[filters.timeRange]) return false;
+      
+      return true;
+    });
+  }, [allTrades, filters]);
+
+  const stats: Stats = useMemo(() => ({
+    totalAnalyzed: allTrades.length,
+    highScoreCount: allTrades.filter(t => t.insiderScore >= 70).length,
+    totalVolume: allTrades.reduce((sum, t) => sum + t.size, 0),
+    marketsTracked: new Set(allTrades.map(t => t.conditionId)).size,
+  }), [allTrades]);
+
+  return (
+    <div className="min-h-screen bg-gray-950 text-gray-100">
+      <Header stats={stats} />
+      
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+        {error && (
+          <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+            <p className="text-yellow-400 text-sm font-mono">{error}</p>
+          </div>
+        )}
+        
+        <div className="mb-4 flex items-center gap-2">
+          <span className="relative flex h-3 w-3">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+          </span>
+          <span className="text-xs text-green-400 font-mono">LIVE DATA FROM POLYMARKET</span>
+        </div>
+        
+        <Filters 
+          filters={filters}
+          onChange={setFilters}
+          isLive={isLive}
+          onToggleLive={() => setIsLive(!isLive)}
+          lastUpdate={lastUpdate}
+        />
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 bg-gray-900/50 border border-gray-800 rounded-lg overflow-hidden">
+            {isLoading ? (
+              <div className="py-20 text-center">
+                <div className="inline-block w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin mb-4" />
+                <p className="text-gray-500 font-mono text-sm">Fetching live trades...</p>
+              </div>
+            ) : (
+              <TradeTable 
+                trades={filteredTrades.slice(0, 25)}
+                selectedId={selectedTrade?.id || null}
+                onSelect={setSelectedTrade}
+              />
+            )}
+            
+            {filteredTrades.length > 25 && (
+              <div className="px-4 py-3 border-t border-gray-800 text-center">
+                <span className="text-xs text-gray-500 font-mono">
+                  Showing 25 of {filteredTrades.length} trades
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-5">
+            {selectedTrade ? (
+              <>
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-sm font-mono text-gray-400 uppercase tracking-wider">
+                    Score Breakdown
+                  </h3>
+                  <ScoreBadge score={selectedTrade.insiderScore} size="md" />
+                </div>
+                
+                <ScoreBreakdown 
+                  scores={selectedTrade.scores}
+                  walletAge={selectedTrade.walletAge}
+                  marketsTraded={selectedTrade.marketsTraded}
+                  wallet={selectedTrade.wallet}
+                />
+                
+                <div className="mt-6 pt-4 border-t border-gray-800 space-y-3">
+                  {selectedTrade.txHash && (
+                    <a 
+                      href={`https://polygonscan.com/tx/${selectedTrade.txHash}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block w-full py-2 bg-gray-800 text-gray-400 rounded font-mono text-sm hover:bg-gray-700 transition border border-gray-700 text-center"
+                    >
+                      View on PolygonScan ↗
+                    </a>
+                  )}
+                  {selectedTrade.marketSlug && (
+                    <a 
+                      href={`https://polymarket.com/event/${selectedTrade.marketSlug}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block w-full py-2 bg-cyan-500/20 text-cyan-400 rounded font-mono text-sm hover:bg-cyan-500/30 transition border border-cyan-500/30 text-center"
+                    >
+                      View Market on Polymarket ↗
+                    </a>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-gray-600 py-16">
+                <div className="w-16 h-16 rounded-full border-2 border-dashed border-gray-700 flex items-center justify-center mb-4">
+                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                </div>
+                <p className="font-mono text-sm">Select a trade to view</p>
+                <p className="font-mono text-xs text-gray-700 mt-1">score breakdown</p>
+              </div>
+            )}
+          </div>
+        </div>
+        
+        <div className="mt-6 p-4 bg-gray-900/30 border border-gray-800/50 rounded-lg">
+          <div className="flex flex-wrap items-center gap-4 sm:gap-6 text-xs font-mono">
+            <span className="text-gray-500">SCORE LEGEND:</span>
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-red-500" />
+              <span className="text-gray-400">80%+ Critical</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-orange-500" />
+              <span className="text-gray-400">60-79% High</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-yellow-500" />
+              <span className="text-gray-400">40-59% Medium</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-emerald-500" />
+              <span className="text-gray-400">0-39% Normal</span>
+            </div>
+          </div>
+        </div>
+      </main>
+      
+      <footer className="border-t border-gray-800/50 mt-12 py-6">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 text-center">
+          <p className="text-xs text-gray-600 font-mono leading-relaxed">
+            ⚡ Live data from Polymarket • Scores are algorithmic estimates, not guarantees
+          </p>
+        </div>
+      </footer>
+    </div>
+  );
+}
