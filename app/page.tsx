@@ -10,6 +10,8 @@ import { AnalyzedTrade, FilterState, Stats } from '@/lib/types';
 import { analyzeRealTrades } from '@/lib/scoring';
 import { fetchRealTrades } from '@/lib/polymarket';
 
+const TRADES_PER_PAGE = 25;
+
 export default function Home() {
   const [allTrades, setAllTrades] = useState<AnalyzedTrade[]>([]);
   const [selectedTrade, setSelectedTrade] = useState<AnalyzedTrade | null>(null);
@@ -17,6 +19,7 @@ export default function Home() {
   const [lastUpdate, setLastUpdate] = useState(new Date());
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
   
   const [filters, setFilters] = useState<FilterState>({
     minSize: 0,
@@ -59,6 +62,11 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [isLive, fetchTrades]);
 
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filters]);
+
   const filteredTrades = useMemo(() => {
     const now = Date.now();
     const timeRangeMs: Record<string, number> = {
@@ -80,12 +88,23 @@ export default function Home() {
     });
   }, [allTrades, filters]);
 
+  // Pagination calculations
+  const totalPages = Math.ceil(filteredTrades.length / TRADES_PER_PAGE);
+  const startIndex = (currentPage - 1) * TRADES_PER_PAGE;
+  const endIndex = startIndex + TRADES_PER_PAGE;
+  const currentTrades = filteredTrades.slice(startIndex, endIndex);
+
   const stats: Stats = useMemo(() => ({
     totalAnalyzed: allTrades.length,
     highScoreCount: allTrades.filter(t => t.insiderScore >= 70).length,
     totalVolume: allTrades.reduce((sum, t) => sum + t.size, 0),
     marketsTracked: new Set(allTrades.map(t => t.conditionId)).size,
   }), [allTrades]);
+
+  const goToPage = (page: number) => {
+    setCurrentPage(Math.max(1, Math.min(page, totalPages)));
+    setSelectedTrade(null);
+  };
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
@@ -123,17 +142,102 @@ export default function Home() {
               </div>
             ) : (
               <TradeTable 
-                trades={filteredTrades.slice(0, 25)}
+                trades={currentTrades}
                 selectedId={selectedTrade?.id || null}
                 onSelect={setSelectedTrade}
               />
             )}
             
-            {filteredTrades.length > 25 && (
-              <div className="px-4 py-3 border-t border-gray-800 text-center">
+            {/* Pagination Controls */}
+            {filteredTrades.length > 0 && (
+              <div className="px-4 py-3 border-t border-gray-800 flex items-center justify-between">
                 <span className="text-xs text-gray-500 font-mono">
-                  Showing 25 of {filteredTrades.length} trades
+                  Showing {startIndex + 1}-{Math.min(endIndex, filteredTrades.length)} of {filteredTrades.length} trades
                 </span>
+                
+                <div className="flex items-center gap-2">
+                  {/* First Page */}
+                  <button
+                    onClick={() => goToPage(1)}
+                    disabled={currentPage === 1}
+                    className={`px-2 py-1 rounded font-mono text-xs transition ${
+                      currentPage === 1
+                        ? 'text-gray-600 cursor-not-allowed'
+                        : 'text-gray-400 hover:text-cyan-400 hover:bg-gray-800'
+                    }`}
+                  >
+                    ««
+                  </button>
+                  
+                  {/* Previous Page */}
+                  <button
+                    onClick={() => goToPage(currentPage - 1)}
+                    disabled={currentPage === 1}
+                    className={`px-2 py-1 rounded font-mono text-xs transition ${
+                      currentPage === 1
+                        ? 'text-gray-600 cursor-not-allowed'
+                        : 'text-gray-400 hover:text-cyan-400 hover:bg-gray-800'
+                    }`}
+                  >
+                    ‹ Prev
+                  </button>
+                  
+                  {/* Page Numbers */}
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+                      
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => goToPage(pageNum)}
+                          className={`w-8 h-8 rounded font-mono text-xs transition ${
+                            currentPage === pageNum
+                              ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50'
+                              : 'text-gray-400 hover:text-cyan-400 hover:bg-gray-800'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  
+                  {/* Next Page */}
+                  <button
+                    onClick={() => goToPage(currentPage + 1)}
+                    disabled={currentPage === totalPages}
+                    className={`px-2 py-1 rounded font-mono text-xs transition ${
+                      currentPage === totalPages
+                        ? 'text-gray-600 cursor-not-allowed'
+                        : 'text-gray-400 hover:text-cyan-400 hover:bg-gray-800'
+                    }`}
+                  >
+                    Next ›
+                  </button>
+                  
+                  {/* Last Page */}
+                  <button
+                    onClick={() => goToPage(totalPages)}
+                    disabled={currentPage === totalPages}
+                    className={`px-2 py-1 rounded font-mono text-xs transition ${
+                      currentPage === totalPages
+                        ? 'text-gray-600 cursor-not-allowed'
+                        : 'text-gray-400 hover:text-cyan-400 hover:bg-gray-800'
+                    }`}
+                  >
+                    »»
+                  </button>
+                </div>
               </div>
             )}
           </div>
